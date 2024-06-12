@@ -17,9 +17,12 @@ import combatStyleDetailMap from "./combatsimulator/data/combatStyleDetailMap.js
 
 const ONE_SECOND = 1e9;
 const ONE_HOUR = 60 * 60 * ONE_SECOND;
+const ALL_ZONES_SIM_TIME = 3
 
 let buttonStartSimulation = document.getElementById("buttonStartSimulation");
+let buttonStartAllZonesSimulation = document.getElementById("buttonStartAllSimulations");
 let progressbar = document.getElementById("simulationProgressBar");
+let allZonesProgressbar = document.getElementById("allZonesSimulationProgressBar");
 
 let worker = new Worker(new URL("worker.js", import.meta.url));
 
@@ -29,6 +32,17 @@ let drinks = [null, null, null];
 let abilities = [null, null, null, null];
 let triggerMap = {};
 let modalTriggers = [];
+let allZonesSimulationResults = {};
+let allZonesSimulationProgress = {};
+
+// TOOD dungeon wave spawns
+let gameZones = Object.values(actionDetailMap)
+.filter((action) => action.type == "/action_types/combat" && action.category != "/action_categories/combat/dungeons")
+.sort((a, b) => a.sortIndex - b.sortIndex)
+
+for (const zone of gameZones) {
+    allZonesSimulationProgress[zone.hrid] = 0;
+}
 
 window.revenue = 0;
 window.noRngRevenue = 0;
@@ -788,10 +802,7 @@ function showElement(element) {
 function initZones() {
     let zoneSelect = document.getElementById("selectZone");
 
-    // TOOD dungeon wave spawns
-    let gameZones = Object.values(actionDetailMap)
-        .filter((action) => action.type == "/action_types/combat" && action.category != "/action_categories/combat/dungeons")
-        .sort((a, b) => a.sortIndex - b.sortIndex);
+    
 
     for (const zone of Object.values(gameZones)) {
         zoneSelect.add(new Option(zone.name, zone.hrid));
@@ -846,7 +857,7 @@ function showKills(simResult) {
 
     let monsters = Object.keys(simResult.deaths)
         .filter((enemy) => enemy != "player")
-        .sort();
+        .sort(); 
 
     const totalDropMap = new Map();
     const noRngTotalDropMap = new Map();
@@ -1025,6 +1036,111 @@ function showKills(simResult) {
     resultDiv.replaceChildren(...newChildren);
     dropsResultDiv.replaceChildren(...newDropChildren);
     noRngDropsResultDiv.replaceChildren(...newNoRngDropChildren);
+}
+
+function calculateTotalProfit(simResult) {
+    let dropRateMultiplier = simResult.dropRateMultiplier;
+    let rareFindMultiplier = simResult.rareFindMultiplier;
+
+    let monsters = Object.keys(simResult.deaths)
+        .filter((enemy) => enemy != "player")
+        .sort();
+
+    const totalDropMap = new Map();
+    const noRngTotalDropMap = new Map();
+    for (const monster of monsters) {
+        const dropMap = new Map();
+        const rareDropMap = new Map();
+        for (const drop of combatMonsterDetailMap[monster].dropTable) {
+            if (drop.minEliteTier > simResult.eliteTier) {
+                continue;
+            }
+            dropMap.set(itemDetailMap[drop.itemHrid]['name'], { "dropRate": Math.min(1, drop.dropRate * dropRateMultiplier), "number": 0, "dropMin": drop.minCount, "dropMax": drop.maxCount, "noRngDropAmount": 0 });
+        }
+        for (const drop of combatMonsterDetailMap[monster].rareDropTable) {
+            if (drop.minEliteTier > simResult.eliteTier) {
+                continue;
+            }
+            rareDropMap.set(itemDetailMap[drop.itemHrid]['name'], { "dropRate": drop.dropRate * rareFindMultiplier, "number": 0, "dropMin": drop.minCount, "dropMax": drop.maxCount, "noRngDropAmount": 0 });
+        }
+
+        for (let dropObject of dropMap.values()) {
+            dropObject.noRngDropAmount += simResult.deaths[monster] * dropObject.dropRate * ((dropObject.dropMax + dropObject.dropMin) / 2);
+        }
+        for (let dropObject of rareDropMap.values()) {
+            dropObject.noRngDropAmount += simResult.deaths[monster] * dropObject.dropRate * ((dropObject.dropMax + dropObject.dropMin) / 2);
+        }
+
+        for (let i = 0; i < simResult.deaths[monster]; i++) {
+            for (let dropObject of dropMap.values()) {
+                let chance = Math.random();
+                if (chance <= dropObject.dropRate) {
+                    let amount = Math.floor(Math.random() * (dropObject.dropMax - dropObject.dropMin + 1) + dropObject.dropMin)
+                    dropObject.number = dropObject.number + amount;
+                }
+            }
+            for (let dropObject of rareDropMap.values()) {
+                let chance = Math.random();
+                if (chance <= dropObject.dropRate) {
+                    let amount = Math.floor(Math.random() * (dropObject.dropMax - dropObject.dropMin + 1) + dropObject.dropMin)
+                    dropObject.number = dropObject.number + amount;
+                }
+            }
+        }
+        for (let [name, dropObject] of dropMap.entries()) {
+            if (totalDropMap.has(name)) {
+                totalDropMap.set(name, totalDropMap.get(name) + dropObject.number);
+            } else {
+                totalDropMap.set(name, dropObject.number);
+            }
+            if (noRngTotalDropMap.has(name)) {
+                noRngTotalDropMap.set(name, noRngTotalDropMap.get(name) + dropObject.noRngDropAmount);
+            } else {
+                noRngTotalDropMap.set(name, dropObject.noRngDropAmount);
+            }
+        }
+        for (let [name, dropObject] of rareDropMap.entries()) {
+            if (totalDropMap.has(name)) {
+                totalDropMap.set(name, totalDropMap.get(name) + dropObject.number);
+            } else {
+                totalDropMap.set(name, dropObject.number);
+            }
+            if (noRngTotalDropMap.has(name)) {
+                noRngTotalDropMap.set(name, noRngTotalDropMap.get(name) + dropObject.noRngDropAmount);
+            } else {
+                noRngTotalDropMap.set(name, dropObject.noRngDropAmount);
+            }
+        }
+    }
+
+    let total = 0;
+    for (let [name, dropAmount] of totalDropMap.entries()) {
+        let price = -1;
+        let revenueSetting = document.getElementById('selectPrices_drops').value;
+        if (window.prices) {
+            let item = window.prices[name];
+            if (item) {
+                if (revenueSetting == 'bid') {
+                    if (item['bid'] !== -1) {
+                        price = item['bid'];
+                    } else if (item['ask'] !== -1) {
+                        price = item['ask'];
+                    }
+                } else if (revenueSetting == 'ask') {
+                    if (item['ask'] !== -1) {
+                        price = item['ask'];
+                    } else if (item['bid'] !== -1) {
+                        price = item['bid'];
+                    }
+                }
+                if (price == -1) {
+                    price = item['vendor'];
+                }
+            }
+        }
+        total += price * dropAmount;
+    }
+    return total;
 }
 
 function showDeaths(simResult) {
@@ -1554,6 +1670,126 @@ function startSimulation() {
 
 // #endregion
 
+// #region All Zones Result
+
+function showAllZonesSimulationResult() {
+    const table = document.getElementById("AllSimulationsResults")
+    const headers = [ "Zone", "Kills", "Deaths", "XP", "Profit" ]
+    table.innerHTML = `
+    <thead>
+                  <tr>
+                  ${headers.map(header => `<th scope="col">${header}</th>`).join('')}
+                  </tr>
+                </thead>
+                <tbody>
+                ${Object.entries(allZonesSimulationResults).map(([ zone, result ]) => {
+                    let monsters = Object.entries(result.deaths)
+                        .filter(([name,value]) => name != "player")
+                        .reduce((a, [name,value]) => a + value, 0);
+                    console.log()
+                    return `<tr>
+                    <th scope="row">${zone}</th>
+                    <td>${(monsters / ALL_ZONES_SIM_TIME).toFixed(1)}</td>
+                    <td>${result.deaths.player || 0}</td>
+                    <td>${(Object.values(result.experienceGained.player).reduce((a,b) => a + b) / 5).toFixed(1)}</td>
+                    <td>${calculateTotalProfit(result)}</td>
+                  </tr>`
+                }).join('')}
+                </tbody>
+    `
+    console.log(table);
+}
+
+// #endregion
+
+// #region All Zones Controls
+
+function initAllZonesSimulationControls() {
+    buttonStartAllZonesSimulation.addEventListener("click", (event) => {
+        let invalidElements = document.querySelectorAll(":invalid");
+        if (invalidElements.length > 0) {
+            invalidElements.forEach((element) => element.reportValidity());
+            return;
+        }
+        buttonStartAllZonesSimulation.disabled = true;
+        startAllSimulations();
+    });
+}
+
+function startAllSimulations() {
+    updateState();
+    updateUI();
+
+    for (let i = 0; i < 3; i++) {
+        if (food[i] && i < player.combatDetails.combatStats.foodSlots) {
+            let consumable = new Consumable(food[i], triggerMap[food[i]]);
+            player.food[i] = consumable;
+        } else {
+            player.food[i] = null;
+        }
+
+        if (drinks[i] && i < player.combatDetails.combatStats.drinkSlots) {
+            let consumable = new Consumable(drinks[i], triggerMap[drinks[i]]);
+            player.drinks[i] = consumable;
+        } else {
+            player.drinks[i] = null;
+        }
+    }
+
+    for (let i = 0; i < 5; i++) {
+        if (abilities[i] && player.intelligenceLevel >= abilitySlotsLevelRequirementList[i + 1]) {
+            let abilityLevelInput = document.getElementById("inputAbilityLevel_" + i);
+            let ability = new Ability(abilities[i], Number(abilityLevelInput.value), triggerMap[abilities[i]]);
+            player.abilities[i] = ability;
+        } else {
+            player.abilities[i] = null;
+        }
+    }
+ 
+
+    for (let zone of gameZones.map(i => i.hrid)) {
+        let workerMessage = {
+            type: "start_simulation",
+            player: player,
+            zoneHrid: zone,
+            simulationTimeLimit: ALL_ZONES_SIM_TIME * ONE_HOUR,
+        };
+        let worker = new Worker(new URL("worker.js", import.meta.url));
+        worker.onmessage = function (event) {
+            switch (event.data.type) {
+                case "simulation_result":
+                    allZonesSimulationProgress[ event.data.zoneHrid ] = 1
+                    allZonesSimulationResults[event.data.zoneHrid] = event.data.simResult
+                    let isAllDone = Object.values(allZonesSimulationProgress).every((value) => value === 1);
+                    if (isAllDone) {
+                        allZonesProgressbar.style.width = "100%";
+                        allZonesProgressbar.innerHTML = "100%";
+                        console.log(allZonesSimulationResults);
+                        for (const zone of gameZones) {
+                            allZonesSimulationProgress[zone.hrid] = 0;
+                        }
+                        showAllZonesSimulationResult();
+                        buttonStartAllZonesSimulation.disabled = false;
+                    }
+                    break;
+                case "simulation_progress":
+                    allZonesSimulationProgress[ event.data.zoneHrid ] = event.data.simResult
+                    let values = Object.values(allZonesSimulationProgress).filter((i) => i !== undefined);
+                    let progressPercent = Math.floor(values.reduce((acc, curr) => acc + curr) / values.length * 100);
+                    allZonesProgressbar.style.width = progressPercent + "%";
+                    allZonesProgressbar.innerHTML = progressPercent + "%";
+                    break;
+                case "simulation_error":
+                    showErrorModal(event.data.error.toString());
+                    break;
+            }
+        };
+        worker.postMessage(workerMessage);
+    }
+}
+
+// #endregion
+
 // #region Equipment Sets
 
 function initEquipmentSetsModal() {
@@ -1827,7 +2063,7 @@ function initImportExportModal() {
                 });
             }
         }
-        let playerArray = {
+    let playerArray = {
             "attackLevel": player.attackLevel,
             "magicLevel": player.magicLevel,
             "powerLevel": player.powerLevel,
@@ -1872,7 +2108,7 @@ function initImportExportModal() {
     importSetButton.addEventListener("click", (event) => {
         let importSet = document.getElementById("inputSet").value;
         importSet = JSON.parse(importSet);
-        ["stamina", "intelligence", "attack", "power", "defense", "ranged", "magic"].forEach((skill) => {
+    ["stamina", "intelligence", "attack", "power", "defense", "ranged", "magic"].forEach((skill) => {
             let levelInput = document.getElementById("inputLevel_" + skill);
             levelInput.value = importSet.player[skill + "Level"];
         });
@@ -2140,6 +2376,7 @@ initAbilitiesSection();
 initZones();
 initTriggerModal();
 initSimulationControls();
+initAllZonesSimulationControls();
 initEquipmentSetsModal();
 initErrorHandling();
 initImportExportModal();

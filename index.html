@@ -1229,6 +1229,25 @@
                 </div>
             </div>
         </div>
+        <div class="row mb-2 pt-3">
+            <div class="col-md-auto">
+                <button id="buttonStartAllSimulations" class="btn btn-primary" type="button">
+                    Start All Zones Simulation
+                </button>
+            </div>
+            <div class="col align-self-center">
+                <div class="progress">
+                    <div id="allZonesSimulationProgressBar" class="progress-bar" role="progressbar"
+                        style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="table-responsive">
+            <table class="table"  id="AllSimulationsResults"> 
+                
+              </table>
+          </div>
     </div>
     <div class="modal" id="triggerModal" tabindex="-1">
         <!-- #region Trigger Modal -->
@@ -1967,7 +1986,8 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.0/dist/js/bootstrap.bundle.min.js"
         integrity="sha384-A3rJD856KowSb7dwlZdYEkO39Gagi7vIsF0jrRAoQmDKKtQBHUuLZ9AsSv4jD4Xa"
         crossorigin="anonymous"></script>
-    <script src="dist/bundle.js" type="module"></script>
+    <script src="dist/bundle.js" 
+    crossorigin="anonymous" type="module"></script>
 </body>
 <footer>
     <div style="text-align: center;">
